@@ -1,0 +1,21 @@
+/ {
+    compatible = "digilent,cora-z7-07s", "xlnx,zynq-7000";
+
+    chosen {
+        bootargs = "console=ttyPS0,115200 earlycon=cdns,mmio32,0xe0000000";
+    };
+
+    aliases {
+        /delete-property/ serial1;  
+    };
+};
+
+/delete-node/ &ps7_cortexa9_1;
+
+&amba {
+    /delete-node/ ptm@f889d000;
+};
+
+&funnel0_in_port1 {
+    /delete-property/ remote-endpoint;
+};
