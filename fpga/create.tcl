@@ -27,6 +27,17 @@ if {[llength $hdl_files] > 0} {
     puts "WARNING: no .v/.vh/.sv/.svh files found in $hdl_dir"
 }
 
+set xdc_dir [file join $src_dir "xdc"]
+set xdc_files [glob -nocomplain \
+    [file join $xdc_dir "*.xdc"] \
+]
+
+if {[llength $xdc_files] > 0} {
+    add_files -fileset constrs_1 -norecurse $xdc_files
+} else {
+    puts "WARNING: no .xdc files found in $xdc_dir"
+}
+
 set_property top main [current_fileset]
 update_compile_order -fileset sources_1
 

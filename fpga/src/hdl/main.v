@@ -21,9 +21,23 @@ module main
    inout [53:0] FIXED_IO_mio,
    inout 	FIXED_IO_ps_clk,
    inout 	FIXED_IO_ps_porb,
-   inout 	FIXED_IO_ps_srstb
+   inout 	FIXED_IO_ps_srstb,
+
+   output 	led0_r,
+   output 	led0_g,
+   output 	led0_b,
+   output 	led1_r,
+   output 	led1_g,
+   output 	led1_b
    );
 
+   assign led0_r = 0;
+   assign led0_g = 0;
+   assign led0_b = 0;
+   assign led1_r = 0;
+   assign led1_g = 0;
+   assign led1_b = 0;
+         
    design_main design_main_inst
      (
       .DDR_addr(DDR_addr),
@@ -46,7 +60,10 @@ module main
       .FIXED_IO_mio(FIXED_IO_mio),
       .FIXED_IO_ps_clk(FIXED_IO_ps_clk),
       .FIXED_IO_ps_porb(FIXED_IO_ps_porb),
-      .FIXED_IO_ps_srstb(FIXED_IO_ps_srstb)
+      .FIXED_IO_ps_srstb(FIXED_IO_ps_srstb),
+
+      .clk_50MHz(),
+      .rstn_50MHz()
       );
    
 endmodule

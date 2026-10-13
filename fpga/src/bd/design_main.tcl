@@ -200,6 +200,11 @@ proc create_root_design { parentCell } {
 
 
   # Create ports
+  set clk_50MHz [ create_bd_port -dir O -type clk clk_50MHz ]
+  set_property -dict [ list \
+   CONFIG.ASSOCIATED_RESET {FCLK_RESET0_N_0} \
+ ] $clk_50MHz
+  set rstn_50MHz [ create_bd_port -dir O -type rst rstn_50MHz ]
 
   # Create instance: processing_system7_0, and set properties
   set processing_system7_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 processing_system7_0 ]
@@ -539,6 +544,10 @@ proc create_root_design { parentCell } {
   connect_bd_intf_net -intf_net processing_system7_0_FIXED_IO [get_bd_intf_ports FIXED_IO] [get_bd_intf_pins processing_system7_0/FIXED_IO]
 
   # Create port connections
+  connect_bd_net -net processing_system7_0_FCLK_CLK0  [get_bd_pins processing_system7_0/FCLK_CLK0] \
+  [get_bd_ports clk_50MHz]
+  connect_bd_net -net processing_system7_0_FCLK_RESET0_N  [get_bd_pins processing_system7_0/FCLK_RESET0_N] \
+  [get_bd_ports rstn_50MHz]
 
   # Create address segments
 
