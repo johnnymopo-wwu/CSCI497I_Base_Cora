@@ -34,10 +34,26 @@ module main
    assign led0_r = 0;
    assign led0_g = 0;
    assign led0_b = 0;
-   assign led1_r = 0;
-   assign led1_g = 0;
-   assign led1_b = 0;
+   //assign led1_r = 0;
+   //assign led1_g = 0;
+   //assign led1_b = 0;
          
+   wire clk_50MHz;
+   
+   wire [255:0] regs_in;
+   wire [255:0] regs_out;
+   wire [2:0] rgb_sel;
+   
+   assign regs_in = regs_out;
+   assign rgb_sel = regs_out[34:32];
+      
+   duty50 duty50_inst
+    (
+        .clk(clk_50MHz),
+        .sig_in(rgb_sel),
+        .sig_out({led1_r, led1_g, led1_b})
+    );
+   
    design_main design_main_inst
      (
       .DDR_addr(DDR_addr),
@@ -62,8 +78,11 @@ module main
       .FIXED_IO_ps_porb(FIXED_IO_ps_porb),
       .FIXED_IO_ps_srstb(FIXED_IO_ps_srstb),
 
-      .clk_50MHz(),
-      .rstn_50MHz()
+      .clk_50MHz(clk_50MHz),
+      .rstn_50MHz(),
+      
+      .regs_out(regs_out),
+      .regs_in(regs_in)
       );
    
 endmodule
