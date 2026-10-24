@@ -19,7 +19,7 @@ MACHINE_NAME="project_main-zynq"
 # guess for the meta-xilinx SDT flow; any that don't exist in your layers
 # are skipped. Check with:
 #   bitbake-layers show-recipes | grep -iE 'fsbl|bitstream|device-tree|bootbin'
-HW_RECIPES="sdt-artifacts device-tree fsbl-firmware fsbl bitstream-extraction bitstream xilinx-bootbin"
+HW_RECIPES="sdt-artifacts device-tree fsbl-firmware fsbl bitstream xilinx-bootbin"
 
 if [[ ! -f "${DTG_DIR}/system-top.dts" ]]; then
     echo "ERROR: no system device tree in ${DTG_DIR}. Run the FPGA build script first." >&2
@@ -47,7 +47,10 @@ grep -q "^MACHINE = \"${MACHINE_NAME}\"" conf/local.conf || \
 # outside the layers, so bitbake's checksums may not see that they changed.
 CLEAN=""
 for r in $HW_RECIPES; do
-    if bitbake-layers show-recipes "$r" 2>/dev/null | grep -q "^${r}:"; then
+    # show-recipes also lists recipes that exist but are skipped in this
+    # configuration (e.g. xsct-only ones); bitbake can't run those.
+    out="$(bitbake-layers show-recipes "$r" 2>/dev/null || true)"
+    if grep -q "^${r}:" <<<"$out" && ! grep -qi "skipped" <<<"$out"; then
         CLEAN="$CLEAN $r"
     fi
 done
@@ -63,3 +66,4 @@ echo "=== Deploy outputs (check the timestamps are new) ==="
 ls -l --time-style=+'%Y-%m-%d %H:%M:%S' "${DEPLOY}/boot.bin" "${DEPLOY}/system.dtb" "${DEPLOY}/uImage"
 echo "local.conf diff vs. previous:"
 diff conf/local.conf.bak conf/local.conf || true
+
