@@ -43,6 +43,13 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 # To test this script, run the following commands from Vivado Tcl console:
 # source design_main_script.tcl
 
+
+# The design that will be created by this Tcl script contains the following 
+# module references:
+# axil_regs
+
+# Please add the sources of those modules before sourcing this Tcl script.
+
 # If there is no project opened, this script will create a
 # project, but make sure you do not have an existing project
 # <./myproj/project_1.xpr> in the current working folder.
@@ -131,6 +138,8 @@ set bCheckIPs 1
 if { $bCheckIPs == 1 } {
    set list_check_ips "\ 
 xilinx.com:ip:processing_system7:5.5\
+xilinx.com:ip:smartconnect:1.0\
+xilinx.com:ip:proc_sys_reset:5.0\
 "
 
    set list_ips_missing ""
@@ -148,6 +157,31 @@ xilinx.com:ip:processing_system7:5.5\
       set bCheckIPsPassed 0
    }
 
+}
+
+##################################################################
+# CHECK Modules
+##################################################################
+set bCheckModules 1
+if { $bCheckModules == 1 } {
+   set list_check_mods "\ 
+axil_regs\
+"
+
+   set list_mods_missing ""
+   common::send_gid_msg -ssname BD::TCL -id 2020 -severity "INFO" "Checking if the following modules exist in the project's sources: $list_check_mods ."
+
+   foreach mod_vlnv $list_check_mods {
+      if { [can_resolve_reference $mod_vlnv] == 0 } {
+         lappend list_mods_missing $mod_vlnv
+      }
+   }
+
+   if { $list_mods_missing ne "" } {
+      catch {common::send_gid_msg -ssname BD::TCL -id 2021 -severity "ERROR" "The following module(s) are not found in the project: $list_mods_missing" }
+      common::send_gid_msg -ssname BD::TCL -id 2022 -severity "INFO" "Please add source files for the missing module(s) above."
+      set bCheckIPsPassed 0
+   }
 }
 
 if { $bCheckIPsPassed != 1 } {
@@ -204,7 +238,9 @@ proc create_root_design { parentCell } {
   set_property -dict [ list \
    CONFIG.ASSOCIATED_RESET {FCLK_RESET0_N_0} \
  ] $clk_50MHz
-  set rstn_50MHz [ create_bd_port -dir O -type rst rstn_50MHz ]
+  set rstn_50MHz [ create_bd_port -dir O -from 0 -to 0 -type rst rstn_50MHz ]
+  set regs_in [ create_bd_port -dir I -from 255 -to 0 regs_in ]
+  set regs_out [ create_bd_port -dir O -from 255 -to 0 regs_out ]
 
   # Create instance: processing_system7_0, and set properties
   set processing_system7_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:processing_system7:5.5 processing_system7_0 ]
@@ -535,21 +571,55 @@ proc create_root_design { parentCell } {
     CONFIG.PCW_USB_RESET_SELECT {Share reset pin} \
     CONFIG.PCW_USE_AXI_NONSECURE {0} \
     CONFIG.PCW_USE_CROSS_TRIGGER {0} \
-    CONFIG.PCW_USE_M_AXI_GP0 {0} \
+    CONFIG.PCW_USE_M_AXI_GP0 {1} \
   ] $processing_system7_0
 
 
+  # Create instance: axi_smc, and set properties
+  set axi_smc [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc ]
+  set_property CONFIG.NUM_SI {1} $axi_smc
+
+
+  # Create instance: rst_ps7_0_50M, and set properties
+  set rst_ps7_0_50M [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ps7_0_50M ]
+
+  # Create instance: axil_regs_0, and set properties
+  set block_name axil_regs
+  set block_cell_name axil_regs_0
+  if { [catch {set axil_regs_0 [create_bd_cell -type module -reference $block_name $block_cell_name] } errmsg] } {
+     catch {common::send_gid_msg -ssname BD::TCL -id 2095 -severity "ERROR" "Unable to add referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   } elseif { $axil_regs_0 eq "" } {
+     catch {common::send_gid_msg -ssname BD::TCL -id 2096 -severity "ERROR" "Unable to referenced block <$block_name>. Please add the files for ${block_name}'s definition into the project."}
+     return 1
+   }
+  
   # Create interface connections
+  connect_bd_intf_net -intf_net axi_smc_M00_AXI [get_bd_intf_pins axi_smc/M00_AXI] [get_bd_intf_pins axil_regs_0/s_axi]
   connect_bd_intf_net -intf_net processing_system7_0_DDR [get_bd_intf_ports DDR] [get_bd_intf_pins processing_system7_0/DDR]
   connect_bd_intf_net -intf_net processing_system7_0_FIXED_IO [get_bd_intf_ports FIXED_IO] [get_bd_intf_pins processing_system7_0/FIXED_IO]
+  connect_bd_intf_net -intf_net processing_system7_0_M_AXI_GP0 [get_bd_intf_pins processing_system7_0/M_AXI_GP0] [get_bd_intf_pins axi_smc/S00_AXI]
 
   # Create port connections
+  connect_bd_net -net axil_regs_0_regs_out  [get_bd_pins axil_regs_0/regs_out] \
+  [get_bd_ports regs_out]
   connect_bd_net -net processing_system7_0_FCLK_CLK0  [get_bd_pins processing_system7_0/FCLK_CLK0] \
-  [get_bd_ports clk_50MHz]
+  [get_bd_ports clk_50MHz] \
+  [get_bd_pins processing_system7_0/M_AXI_GP0_ACLK] \
+  [get_bd_pins axi_smc/aclk] \
+  [get_bd_pins rst_ps7_0_50M/slowest_sync_clk] \
+  [get_bd_pins axil_regs_0/aclk]
   connect_bd_net -net processing_system7_0_FCLK_RESET0_N  [get_bd_pins processing_system7_0/FCLK_RESET0_N] \
-  [get_bd_ports rstn_50MHz]
+  [get_bd_pins rst_ps7_0_50M/ext_reset_in]
+  connect_bd_net -net regs_in_0_1  [get_bd_ports regs_in] \
+  [get_bd_pins axil_regs_0/regs_in]
+  connect_bd_net -net rst_ps7_0_50M_peripheral_aresetn  [get_bd_pins rst_ps7_0_50M/peripheral_aresetn] \
+  [get_bd_pins axi_smc/aresetn] \
+  [get_bd_ports rstn_50MHz] \
+  [get_bd_pins axil_regs_0/aresetn]
 
   # Create address segments
+  assign_bd_address -offset 0x40000000 -range 0x00001000 -target_address_space [get_bd_addr_spaces processing_system7_0/Data] [get_bd_addr_segs axil_regs_0/s_axi/reg0] -force
 
 
   # Restore current instance
