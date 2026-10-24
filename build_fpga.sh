@@ -17,6 +17,7 @@ DTG_DIR="dtg"
 
 source /tools/Xilinx/Vitis/2024.2/settings64.sh
 
+rm -rf "${PROJECT_ROOT:?}/${DTG_DIR:?}"
 mkdir -p ${PROJECT_ROOT}/${DTG_DIR}
 xsct -eval "source /tools/Xilinx/Vitis/2024.2/scripts/xsct/sdtgen/sdtgen.tcl; sdtgen set_dt_param -xsa ${PROJECT_ROOT}/fpga/project_main/project_main.xsa -dir ${PROJECT_ROOT}/${DTG_DIR}; sdtgen generate_sdt"
 
