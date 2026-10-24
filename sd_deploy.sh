@@ -10,12 +10,9 @@
 # so out-of-tree modules can be built on the board.
 #
 # Usage:
-#   sudo ./sd_deploy.sh -d /dev/sdX [-m MACHINE] [-u USERNAME] [-p pkg1,pkg2,...] [-K KERNEL_VERSION]
+#   mkdir -p /home/mowerj/stage 
+#   sudo STAGE_PARENT=/home/mowerj/stage ./sd_deploy.sh -d /dev/sdX 
 #
-# Examples:
-#   sudo ./sd_deploy.sh -d /dev/sdb
-#   sudo ./sd_deploy.sh -d /dev/sdb -m project_main-versal
-#   sudo ./sd_deploy.sh -d /dev/sdb -u mowerj -p "vim,htop,net-tools,sudo"
 #
 # Kernel headers: run `bitbake kernel-devsrc` first. Debian's own
 # linux-headers-* packages do NOT match the Yocto (linux-xlnx) kernel.
@@ -78,6 +75,47 @@ for f in "${DEPLOY_DIR}/boot.bin" "${DEPLOY_DIR}/uImage" "${DEPLOY_DIR}/system.d
     fi
 done
 
+# --- Host tool preflight (before anything destructive) ---
+if ! command -v debootstrap >/dev/null; then
+    echo "ERROR: debootstrap not installed. Run: sudo apt install debootstrap qemu-user-static" >&2
+    exit 1
+fi
+# ARM binaries in the chroot run through qemu via binfmt_misc. Newer
+# Debian/Ubuntu ship static qemu-user binaries and register them with the
+# F (fix-binary) flag, in which case nothing needs copying into the chroot.
+# Older setups use /usr/bin/qemu-arm-static without F, which must be copied in.
+BINFMT=/proc/sys/fs/binfmt_misc/qemu-arm
+if [[ ! -r "$BINFMT" ]] || ! grep -qx enabled "$BINFMT"; then
+    echo "ERROR: no binfmt_misc handler for ARM binaries ($BINFMT)." >&2
+    echo "Install one: sudo apt install qemu-user-static   (or: qemu-user qemu-user-binfmt)" >&2
+    echo "then: sudo systemctl restart systemd-binfmt" >&2
+    exit 1
+fi
+QEMU_INTERP="$(awk '/^interpreter/ {print $2}' "$BINFMT")"
+QEMU_FIXBIN=""
+grep -q '^flags:.*F' "$BINFMT" && QEMU_FIXBIN=1
+if [[ -z "$QEMU_FIXBIN" && ! -x "$QEMU_INTERP" ]]; then
+    echo "ERROR: binfmt interpreter $QEMU_INTERP not found." >&2
+    exit 1
+fi
+echo "qemu: $QEMU_INTERP${QEMU_FIXBIN:+ (fix-binary, no copy needed)}"
+
+# The rootfs is staged on the host first. It can't go in /tmp on systems
+# where /tmp is a tmpfs mounted nodev/noexec (debootstrap needs to create
+# /dev/null and run binaries there), and it needs ~1 GB+ of space.
+STAGE_PARENT="${STAGE_PARENT:-/var/tmp}"
+mkdir -p "$STAGE_PARENT"
+if ! STAGE_OPTS="$(findmnt -no OPTIONS --target "$STAGE_PARENT")"; then
+    echo "ERROR: could not determine mount options for $STAGE_PARENT." >&2
+    exit 1
+fi
+if [[ ",$STAGE_OPTS," =~ ,(nodev|noexec), ]]; then
+    echo "ERROR: $STAGE_PARENT is mounted with ${BASH_REMATCH[1]} (options: $STAGE_OPTS)." >&2
+    echo "Pick another staging dir: sudo STAGE_PARENT=/some/dir $0 ..." >&2
+    exit 1
+fi
+echo "Staging rootfs under: $STAGE_PARENT ($(df -h --output=avail "$STAGE_PARENT" | tail -1 | tr -d ' ') free)"
+
 # Locate kernel-devsrc package (any of deb/ipk/rpm, whichever PACKAGE_CLASSES produced).
 DEVSRC_PKG="$(find "${YOCTO_TMP}/deploy" \( -path '*/deb/*' -o -path '*/ipk/*' -o -path '*/rpm/*' \) \
                 -name 'kernel-devsrc[-_]*' ! -name '*-dbg*' ! -name '*-dev[-_]*' 2>/dev/null | sort | tail -n1 || true)"
@@ -101,7 +139,7 @@ if [[ "$CONFIRM" != "$DEV" ]]; then
 fi
 
 BOOT_MNT="$(mktemp -d)"
-ROOTFS_STAGE="$(mktemp -d)"
+ROOTFS_STAGE="$(mktemp -d -p "$STAGE_PARENT" sd_deploy_rootfs.XXXXXX)"
 ROOTFS_MNT="$(mktemp -d)"
 PKG_TMP="$(mktemp -d)"
 
@@ -123,7 +161,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Unmount every partition of $DEV, wherever it's mounted (desktop
+# automounters like udisks mount SD cards under /run/media as soon as
+# they appear). Also turns off any swap on it.
+unmount_all() {
+    local p
+    for p in $(lsblk -lnpo NAME "$DEV" | tail -n +2); do
+        swapoff "$p" 2>/dev/null || true
+        while findmnt -rn -S "$p" >/dev/null 2>&1; do
+            umount "$p" || { echo "ERROR: could not unmount $p (in use?)" >&2; exit 1; }
+        done
+    done
+}
+
 # --- Partition and format ---
+echo "=== Unmounting and wiping old partitions on $DEV ==="
+unmount_all
+# Erase filesystem signatures first. The new partitions land at the same
+# offsets as the old ones, so without this the old FAT/ext4 would reappear
+# and the automounter would grab them again before mkfs runs.
+for p in $(lsblk -lnpo NAME "$DEV" | tail -n +2); do
+    wipefs -a -q "$p" || true
+done
+wipefs -a -q "$DEV"
+
 echo "=== Partitioning $DEV ==="
 parted --script "$DEV" \
     mklabel msdos \
@@ -147,8 +208,11 @@ for _ in $(seq 1 20); do
 done
 [[ -b "$PART1" && -b "$PART2" ]] || { echo "ERROR: partition nodes never appeared" >&2; exit 1; }
 
+unmount_all
 mkfs.vfat -F 32 -n BOOT "$PART1"
 mkfs.ext4 -F -L rootfs "$PART2"
+udevadm settle
+unmount_all   # in case the automounter grabbed the fresh filesystems
 
 # --- Boot partition contents ---
 echo "=== Copying boot files ==="
@@ -161,13 +225,12 @@ umount "$BOOT_MNT"
 
 # --- Root filesystem: debootstrap ---
 echo "=== Building Debian rootfs (debootstrap, armhf, bookworm) ==="
-if ! command -v debootstrap >/dev/null; then
-    echo "ERROR: debootstrap not installed. Run: apt install debootstrap qemu-user-static binfmt-support" >&2
-    exit 1
-fi
-
 debootstrap --arch=armhf --foreign bookworm "$ROOTFS_STAGE" http://deb.debian.org/debian
-cp /usr/bin/qemu-arm-static "${ROOTFS_STAGE}/usr/bin/"
+if [[ -z "$QEMU_FIXBIN" ]]; then
+    # Kernel looks for the interpreter at this path *inside* the chroot.
+    mkdir -p "${ROOTFS_STAGE}$(dirname "$QEMU_INTERP")"
+    cp "$QEMU_INTERP" "${ROOTFS_STAGE}${QEMU_INTERP}"
+fi
 chroot "$ROOTFS_STAGE" /debootstrap/debootstrap --second-stage
 
 echo "=== Set a root password for the target system ==="
@@ -266,3 +329,4 @@ rm -rf "$ROOTFS_STAGE"
 
 echo ""
 echo "=== Done. Safe to eject $DEV. ==="
+
